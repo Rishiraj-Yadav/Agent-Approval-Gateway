@@ -425,3 +425,98 @@ skeletons without behavior are not counted as production code; the
 placeholders that grow logic must grow tests. `npm run test:coverage`
 enforces; CI runs it as the Tests step. Gap-closing tests raised the bar
 rather than the bar being lowered (measured 92.5/88.4/99.2/94.5).
+
+## ADR-030 � Transactional audit+state commit (the �11 "atomic decision" contract)
+
+**Status:** accepted (Phase 3)
+**Context:** Phase 2 made decisions fail-closed by _ordering_ (audit append
+before the store CAS). Phase 3 requires that an approved state and its audit
+row commit **together** � a crash/failure between the two is not allowed to
+leave "approved-but-unaudited" or "audited-but-pending".
+**Decision:** `ApprovalManager.commitTransition` takes a _single_
+`TransactionScope` (`@raag/domain` port, new) supplied by the store;
+inside it the CAS UPDATE and the audit INSERT run in one database
+transaction. `openSqliteStore` serializes scopes with a promise-based
+FIFO mutex around `BEGIN IMMEDIATE`, so a second writer queues rather than
+interleaving (await points can otherwise overlap BEGIN). Throwing mid-scope
+rolls back both. The in-memory store mirrors the semantics with
+`inMemoryTransactionScope` (snapshot/restore) so conformance and the same
+manager tests exercise one path. Production fallback to memory remains
+forbidden (#33).
+
+## ADR-031 � SQLite driver: built-in `node:sqlite`, zero runtime deps
+
+**Status:** accepted (Phase 3; amends ADR-009)
+**Context:** �4 demanded evaluation before adding a driver; ADR-009 had
+pre-selected better-sqlite3 but the zero-dep policy (�12/#29) and the
+sync/single-writer model deserved a fresh look on Node 22.
+**Decision:** Use Node's built-in `node:sqlite` (`DatabaseSync`).
+Verified on Node 22.23.2: named + positional params, `changes`/`lastInsertRowid`,
+`isTransaction`, WAL/PRAGMAs. Selection checks (documented): **no
+native compilation** (vs better-sqlite3 = prebuilt binaries/node-gyp on the
+Windows+Linux CI matrix), **zero supply-chain/runtime cost** (vs
+`sql.js`/wasm, `nodejs-sqlite` wrappers, drizzle/knex/ORM churn),
+synchronous API matches our single-process local gateway (no event-loop
+callback tax to hide behind), SQLite MIT-licensed embedded engine.
+`@types/node` provides the typings (already a devDep) ? still **no
+runtime `dependencies`** anywhere in the workspace. **Accepted risk:**
+`node:sqlite` is experimental on Node 22 � pinned behavior covered by
+the conformance suite + pragmas/integrity tests; a driver swap (e.g.
+better-sqlite3 behind the same port) is a leaf change if it destabilizes.
+Revisit when Node 24 LTS becomes the floor.
+
+## ADR-032 � WAL + `synchronous=FULL` + `quick_check` on every open
+
+**Status:** accepted (Phase 3)
+**Context:** �7 asked for durability settings evaluated, not maximized speed.
+**Decision:** pragmas at open: journal WAL, `synchronous=FULL` (fsync per
+commit � a committed approval survives kill/crash at measurable-per-commit
+cost; fine at human-decision rates), busy_timeout 5s (writers queue),
+foreign_keys on. **Integrity probe** (`PRAGMA quick_check`) runs on every
+open: a corrupt ledger cannot serve approvals (fail-closed, tested with a
+garbage file); closes are checkpoint-clean. Durability claim scoped honestly:
+committed transactions survive process crash; OS/power failure relies on
+fsync semantics of FULL; nothing claims multi-disk safety.
+
+## ADR-033 � CAS = pinned-immutable single UPDATE; restart reconciliation
+
+**Status:** accepted (Phase 3)
+**Context:** �9/�12/�13: only one concurrent decision may win; a restart must
+expire lapsed pendings and never approve anything.
+**Decision:** `compareAndSwap` is one UPDATE whose WHERE pins the expected
+revision **and every immutable identity/scope/timer column** (correlation,
+agent, machine/project/session, action metadata, requestedAt/expiresAt) �
+any reshape or stale revision yields 0 changes and a typed conflict, and
+terminal rows are unreachable because a winner already bumped the revision
+(tests: double decide, decide-after-terminal, timer/scope reshaping).
+Concurrent scope races are serialized by the ADR-030 mutex at the store, so
+`changes` observations are truthful. On startup the gateway runs
+`ApprovalManager.reconcile`: due pendings ? `expired` + audited, orphan
+`created` rows ? `failed(persistence-error)`, terminals untouched;
+`close()` never waits on in-flight work beyond rollback, shutdown releases
+waiters WITHOUT fabricating decisions (tested over a real socket + reopen).
+
+## ADR-034 � Local IPC: named pipe / UDS + HMAC envelope auth + replay guard
+
+**Status:** accepted (Phase 3; supersedes the ADR-008 TCP-bearer plan for now)
+**Context:** �15/�16/�17 wanted the safest practical cross-platform local
+boundary with real authentication, replay protection, and zero LAN exposure.
+Node can't verify peer PIDs/SIDs on `node:net` reliably on both OSes.
+**Decision:** transport = per-user name in the Windows named-pipe namespace
+(`\\.\pipe\raag-<user>`; session/owner ACL default) or a POSIX AF_UNIX
+socket (chmod 0600 post-bind; residual-file cleanup once). No TCP sockets
+at all � configuration cannot select a routable bind, and the gateway code
+contains no port/host path (enforced by a security-tier source scan).
+Authentication = HMAC-SHA256 envelope (�16): the server verifies
+`mac` over `raag.local|ts|nonce|canonicalMessage` (constant-time,
+`timingSafeEqual`, key is the required `GATEWAY_LOCAL_KEY`) before
+_anything else_; ReplayGuard bounds skew �60s + FIFO nonce cache (4096).
+Inner messages enforce exact field sets + opaque IDs; responses are
+unauthenticated frames carrying only ids/stable reason codes (trust model
+documented: only the authenticated local user can touch the pipe; later
+channel adapters re-verify). The wire protocol adds `status`/`cancel`/
+`agent-disconnected` kinds and every frame **re-checks machineId +
+correlationId against stored data** and answers a uniform `unknown-request`
+on any scope miss � cross-scope probing is impossible even for a key holder.
+Client nonce generation uses hex (base64url can start with '-'/'_' and be
+invalid under the opaque-id gate � caught by the coverage/flake hunt).

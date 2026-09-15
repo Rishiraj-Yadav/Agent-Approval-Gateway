@@ -1,5 +1,5 @@
-import { InMemoryApprovalRepository } from '@raag/database';
-import { runRepositoryConformance } from '@raag/testing';
+import { InMemoryApprovalRepository, openSqliteStore } from '@raag/database';
+import { createFakeClock, runRepositoryConformance } from '@raag/testing';
 import { describe, expect, it } from 'vitest';
 import { parseMessage, serializeMessage, buildSubmitMessage } from '@raag/protocol';
 
@@ -9,6 +9,16 @@ import { parseMessage, serializeMessage, buildSubmitMessage } from '@raag/protoc
  * is the contract's only source of truth.
  */
 runRepositoryConformance(() => new InMemoryApprovalRepository());
+
+/**
+ * ADR-010/031 gate: the SQLite store must satisfy the identical behavioral
+ * contract. A fresh in-memory SqliteStore per make() call mirrors a fresh
+ * store per test (the conformance helpers each call make() themselves).
+ */
+runRepositoryConformance(() => {
+  const store = openSqliteStore({ path: ':memory:', clock: createFakeClock() });
+  return store.repository;
+});
 
 /**
  * The repository is documented as NOT crash-persistent (in-memory only).

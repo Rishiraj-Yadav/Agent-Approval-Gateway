@@ -18,6 +18,12 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@raag/core": "*"
+    "@raag/application": "*",
+    "@raag/config": "*",
+    "@raag/core": "*",
+    "@raag/database": "*",
+    "@raag/domain": "*",
+    "@raag/protocol": "*",
+    "@raag/security": "*"
   }
 }

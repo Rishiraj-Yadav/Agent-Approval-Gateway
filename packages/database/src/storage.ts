@@ -73,6 +73,21 @@ export class InMemoryApprovalRepository implements ApprovalRepository {
     return Promise.resolve(pending);
   }
 
+  listLive(): Promise<readonly ApprovalRequest[]> {
+    const live = [...this.#stored.values()].filter(
+      (r) => r.state === 'pending' || r.state === 'created',
+    );
+    return Promise.resolve(live);
+  }
+
+  /** Transaction-scope snapshot/restore (cooperative atomicity, ADR-030). */
+  snapshot(): ReadonlyMap<RequestId, ApprovalRequest> {
+    return new Map(this.#stored);
+  }
+  restore(snapshotEntries: ReadonlyMap<RequestId, ApprovalRequest>): void {
+    this.#stored = new Map(snapshotEntries);
+  }
+
   /** Test helper — NOT part of the port. Never used by production code. */
   size(): number {
     return this.#stored.size;
@@ -90,6 +105,13 @@ export class InMemoryAuditSink implements AuditSink {
   append(event: AuditEvent): Promise<void> {
     this.#events.push(event);
     return Promise.resolve();
+  }
+
+  snapshot(): readonly AuditEvent[] {
+    return [...this.#events];
+  }
+  restore(snapshotEvents: readonly AuditEvent[]): void {
+    this.#events = [...snapshotEvents];
   }
 
   /** Test helper — returns a frozen snapshot. */

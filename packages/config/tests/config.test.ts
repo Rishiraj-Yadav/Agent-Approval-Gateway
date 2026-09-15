@@ -9,6 +9,7 @@ function over(rides: Partial<Record<string, string>>): Record<string, string | u
     TELEGRAM_ALLOWED_CHAT_IDS: '555123456',
     APPROVAL_HMAC_KEY: GOOD_KEY,
     GATEWAY_TOKEN_FILE: './data/gateway.token',
+    GATEWAY_LOCAL_KEY: GOOD_KEY,
     GATEWAY_DB_PATH: './data/gateway.db',
     LOG_LEVEL: 'info',
     ...rides,
@@ -58,8 +59,23 @@ describe('parseConfig — fail closed on unsafe/invalid', () => {
       const fields = r.errors.map((e) => e.field);
       expect(fields).toContain('TELEGRAM_BOT_TOKEN');
       expect(fields).toContain('APPROVAL_HMAC_KEY');
-      expect(fields).toContain('GATEWAY_TOKEN_FILE');
+      expect(fields).toContain('GATEWAY_LOCAL_KEY');
       expect(fields).toContain('GATEWAY_DB_PATH');
+    }
+  });
+
+  it('local gateway key material is required and validated (ADR-034)', () => {
+    expect(ok().gateway.localKey.length).toBeGreaterThanOrEqual(32);
+    // bearer-token file is now OPTIONAL (pipe mode is the default transport):
+    expect(parseConfig(over({ GATEWAY_TOKEN_FILE: '' })).ok).toBe(true);
+    expect(ok({ GATEWAY_TOKEN_FILE: '' }).gateway.tokenFilePath).toBeUndefined();
+    expect(parseConfig(over({ GATEWAY_LOCAL_KEY: 'a'.repeat(40) })).ok).toBe(false);
+    expect(parseConfig(over({ GATEWAY_LOCAL_KEY: 'dev-key' })).ok).toBe(false);
+    // IPC path must be printable and bounded; never echoes its value:
+    const hostile = parseConfig(over({ GATEWAY_IPC_PATH: 'evil\u0001path' }));
+    expect(hostile.ok).toBe(false);
+    if (!hostile.ok) {
+      expect(JSON.stringify(hostile.errors)).not.toContain('evil');
     }
   });
 

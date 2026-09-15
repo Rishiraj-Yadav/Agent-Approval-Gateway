@@ -6,8 +6,13 @@
   },
   "include": ["src"],
   "references": [
-    {
-      "path": "../../packages/core"
-    }
+    { "path": "../../packages/application" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/database" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/logging" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/security" }
   ]
 }

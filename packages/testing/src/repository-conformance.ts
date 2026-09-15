@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ApprovalRepository, ApprovalRequest } from '@raag/domain';
 import { parseCorrelationId } from '@raag/domain';
-import { pendingTestRequest } from './harness.js';
+import { createdTestRequest, pendingTestRequest } from './harness.js';
 
 function stepToCancelled(req: ApprovalRequest): ApprovalRequest {
   return Object.freeze({
@@ -77,6 +77,23 @@ export function runRepositoryConformance(make: () => ApprovalRepository): void {
       const pending = await repo.listPending();
       expect(pending.map((r) => r.requestId)).not.toContain(a.requestId);
       expect(pending.length).toBe(1);
+    });
+
+    it('listLive is a superset of listPending and excludes terminals (reconciler basis)', async () => {
+      const repo = make();
+      const pendingOne = pendingTestRequest({ requestId: 'req-conformance-live-p' });
+      const createdOne = createdTestRequest({ requestId: 'req-conformance-live-c' });
+      await repo.add(pendingOne);
+      await repo.add(createdOne);
+      const live = await repo.listLive();
+      const liveIds = live.map((r) => r.requestId);
+      expect(liveIds).toContain(pendingOne.requestId);
+      expect(liveIds).toContain(createdOne.requestId);
+      const pending = await repo.listPending();
+      for (const p of pending) expect(liveIds).toContain(p.requestId);
+      await repo.compareAndSwap(stepToCancelled(createdOne), createdOne.version);
+      const liveAfter = (await repo.listLive()).map((r) => r.requestId);
+      expect(liveAfter).not.toContain(createdOne.requestId);
     });
 
     it('instances are isolated (per-fresh-repo determinism)', async () => {

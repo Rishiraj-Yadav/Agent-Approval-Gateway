@@ -67,11 +67,30 @@ describe('no execution primitive reachable from foundation code (ADR-004)', () =
     }
   });
 
-  it('the placeholder foundation defines no network listeners at all', () => {
-    for (const file of sources) {
+  it('no package (packages/) defines any listener of any kind', () => {
+    for (const file of sources.filter((f) => f.startsWith(join(ROOT, 'packages')))) {
       const text = readFileSync(file, 'utf8');
       expect(text, file).not.toMatch(/\bcreateServer\b|\bserve\s*\(|\.listen\s*\(/);
     }
+  });
+
+  it('the ONLY listener in the repo is the local gateway, and it is IPC-path-only (ADR-034)', () => {
+    const gatewayDir = join(ROOT, 'apps', 'local-gateway', 'src');
+    expect(existsSync(gatewayDir), 'gateway sources must exist').toBe(true);
+    const gatewayFiles = readdirSync(gatewayDir).filter((f) => f.endsWith('.ts'));
+    for (const f of gatewayFiles) {
+      const file = join(gatewayDir, f);
+      const text = readFileSync(file, 'utf8');
+      // node:http (TCP/HTTP) is forbidden everywhere in the gateway…
+      expect(text, file).not.toMatch(/node:http|require\(['"]http/);
+      // …and no numeric listen-port argument pattern may appear
+      expect(text, file).not.toMatch(/\.listen\s*\(\s*\d+|listen\s*\(\s*port|host:|hostname:/i);
+      // wildcard bind literals forbidden (config validation does the work)
+      expect(text, file).not.toContain('0.0.0.0');
+    }
+    // the server module must exist and bind exclusively via { path }
+    const ipc = readFileSync(join(gatewayDir, 'ipc-server.ts'), 'utf8');
+    expect(ipc).toMatch(/server\.listen\(\{\s*path/);
   });
 });
 

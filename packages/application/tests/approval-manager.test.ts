@@ -162,10 +162,10 @@ describe('ApprovalManager.expireDue', () => {
     await submit({ correlationId: 'corr-e2' });
     clock.advance(10_000);
     const n = await mgr.expireDue();
-    expect(n).toBe(1);
+    expect(n).toHaveLength(1);
     expect((await repository.findById(parseRequestId('req-e1')))?.state).toBe('expired');
     expect((await repository.findById(parseRequestId(RID)))?.state).toBe('pending');
-    expect(await mgr.expireDue()).toBe(0);
+    expect(await mgr.expireDue()).toEqual([]);
   });
 });
 

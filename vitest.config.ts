@@ -41,10 +41,11 @@ export default defineConfig({
     })),
     coverage: {
       provider: 'v8',
-      include: ['packages/*/src/**', 'packages/adapters/*/src/**'],
+      include: ['packages/*/src/**', 'packages/adapters/*/src/**', 'apps/*/src/**'],
       // index.ts barrels are pure re-exports; @raag/testing is test-only
-      // infrastructure, not production code (ADR-024).
-      exclude: ['**/index.ts', '**/*.d.ts', 'packages/testing/src/**'],
+      // infrastructure; apps/*/main.ts is the process bootstrap (signal/env
+      // wiring) whose behavior is exercised by the gateway IPC integration.
+      exclude: ['**/index.ts', '**/*.d.ts', 'packages/testing/src/**', '**/main.ts'],
       reporter: ['text', 'json-summary'],
       // Phase 2 floors (ADR-024): security-critical pure logic held highest.
       thresholds: {

@@ -118,17 +118,64 @@ Docs reconciled: architecture.md §14/§15 rewritten to the implemented
 security.md §4 now lists the exact implemented thresholds, testing.md +
 this file updated. ADRs 019–029 added.
 
+## Phase 3 — Durable persistence & local gateway foundation — **DONE** (this session)
+
+Implemented:
+
+- **Driver:** Node's built-in `node:sqlite` (`DatabaseSync`) — re-evaluated
+  per §4; zero new runtime or dev dependencies, no native build on the
+  Windows+Linux CI matrix, sync API fits the single-writer model
+  (ADR-031; ADR-009's better-sqlite3 preference amended).
+- **Migrations** (ADR-032): versioned via `PRAGMA user_version` (authoritative,
+  checked per open), `BEGIN IMMEDIATE` transactions, `BEGIN` failure rolled
+  back without touching committed state, FUTURE schema refuses startup
+  (never destructive-downgrade/data loss), no implicit recreation.
+- **Pragmas** (ADR-032): WAL + `synchronous=FULL` (fsync per commit),
+  busy_timeout 5s, foreign_keys ON, `PRAGMA quick_check` integrity probe on
+  every open — corrupt/garbage file never serves approvals.
+- **Durable repository + audit** (`@raag/database/sqlite`): the shared
+  conformance contract (ADR-010) runs against `InMemoryApprovalRepository`
+  AND `SqliteApprovalRepository` — identical behavior. CAS is ONE pinned
+  immutable + expected-revision UPDATE (test: approve vs deny race admits
+  exactly one winner; scope/timer/identity reshaping, terminal rewrites,
+  missing/ghost ids, and closed-handle reads all fail closed).
+- **Atomic decision+audit** (`TransactionScope` port + `ApprovalManager.
+commitTransition`, ADR-030): CAS + audit INSERT commit inside one
+  `BEGIN IMMEDIATE` serialized through a promise-mutex; an audit disk
+  failure ROLLS BACK the approval write (state stays `pending` →
+  `expireDue` deny-closes; never approved-unaudited, never
+  audited-but-advanced). Cooperative mirror `inMemoryTransactionScope`
+  keeps semantics uniform.
+- **Restart reconciliation** (ADR-033): on boot the gateway expires lapsed
+  pendings (audited per request) and abandons orphan `created` rows to
+  `failed(persistence-error)`; terminal rows byte-unchanged; **no code path
+  can approve during recovery**.
+- **Local gateway (`apps/local-gateway`):** GatewayCore = byte cap →
+  strict envelope parse → constant-time verifyMac → replay/skew guard →
+  scope re-check against stored data → ApprovalManager; WaiterRegistry
+  keyed by requestId, wakes ONLY via terminal snapshot, bounded 1024 +
+  window timers + idempotent settle/drop/clearAll; shutdown releases
+  waiters WITHOUT fabricating decisions; IPC = named pipes (win) /
+  chmod-600 UDS (posix), exclusive bind, ≤16 conns, NDJSON ≤256KB,
+  maxConnections override test-only; HMAC envelope auth (ts+nonce bound,
+  FIFO nonce replay cache, ±60s skew — ADR-034); GatewayClient for hook
+  shims/tests; `defaultIpcPath` per-user; fail-closed bootstrap ordering in
+  `main.ts` (config → key → store/migrate/integrity → core → reconcile →
+  listen → sweeper; any failure exits non-zero before serving; SIGINT/SIGTERM
+  graceful stop).
+
 ## Current phase status
 
-| Item                                                           | Status                                                                                                          |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| domain (machine, request, validation, IDs, decisions, audit)   | implemented + tested (42 unit tests)                                                                            |
-| security/config/logging/protocol/database/testing packages     | implemented + tested                                                                                            |
-| application ApprovalManager + ports                            | implemented + tested                                                                                            |
-| claude-code adapter                                            | **SKELETON ONLY** (normalization tested; no integration)                                                        |
-| Telegram / real agents / HTTP / relay / SQLite / policy engine | **NOT IMPLEMENTED** (planned)                                                                                   |
-| type-aware lint + coverage floors                              | implemented + enforced in CI chain                                                                              |
-| CI                                                             | workflow updated (coverage step); repo committed locally, no GitHub remote yet — remote execution still pending |
+| Item                                                         | Status                                                                                                          |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| domain (machine, request, validation, IDs, decisions, audit) | implemented + tested                                                                                            |
+| security/config/logging/protocol/packages                    | implemented + tested (Phase 3 adds auth + envelope protocol)                                                    |
+| application ApprovalManager                                  | implemented + **transactional CAS+audit commit** (ADR-030)                                                      |
+| durable database (`@raag/database`)                          | **implemented**: SQLite store (node:sqlite), migrations, pragmas, conformance on BOTH stores, restart reconcile |
+| local gateway `apps/local-gateway`                           | **implemented (foundation)**: pipe/UDS + HMAC auth + replay + waiters + shutdown; no Telegram wired             |
+| claude-code adapter                                          | **SKELETON ONLY** (normalization tested; hook runtime & fixtures are Phase 4)                                   |
+| policy engine, relay, Telegram, real agent adapters          | **NOT IMPLEMENTED** (planned — ports only)                                                                      |
+| GitHub CI                                                    | workflow current; repo has Phase 0/1/2 commits, Phase 3 uncommitted at report time — remote still pending       |
 
 ## Verification (this phase, all re-run before commit)
 
@@ -138,45 +185,48 @@ this file updated. ADRs 019–029 added.
 | `npm run typecheck`                    | 0 errors (composite graph + dev-project incl. tests)                    |
 | `npm run lint`                         | 0 (type-aware, incl. import restrictions)                               |
 | `npm run format:check`                 | All matched files use Prettier code style!                              |
-| `npm test` (unit+integration+security) | **16 files, 153 passed**                                                |
-| `npm run test:coverage`                | **92.5% stmts / 88.4% branch / 99.2% funcs / 94.5% lines — floors met** |
+| `npm test` (unit+integration+security) | **27 files, 247 passed**                                                |
+| `npm run test:coverage`                | **90.6% stmts / 85.7% branch / 95.5% funcs / 93.0% lines — floors met** |
 | `npm run build`                        | `tsc -b` exit 0                                                         |
 | `npm run check`                        | full chain green                                                        |
+| Flake-hunt sample                      | 10 consecutive clean unit-pool runs after the base64url-nonce fix       |
 
-## Technical debt / known limitations (Phase 2)
+## Technical debt / known limitations (updated Phase 3)
 
-1. **Concurrency is cooperative single-writer only.** CAS is real at the
-   port level, but transactional/serialized guarantees belong to the DB
-   phase (ADR-010 conformance is the enforcement seam) — documented, not
-   fake-claimed.
-2. Delivery tracking: decisions are terminal domain states; "delivered"
-   facts are audit events only until transports/adapters exist (§14).
-3. E2E/perf tier directories exist but have no cases yet (by design;
-   testing.md schedule).
-4. Telegram SDK decision (ADR-011) deliberately **still open** — nothing
-   imports a vendor yet.
-5. Adapters codex/kilo/generic remain placeholder exports.
-6. `renderHookDecision` returns inert strings — the eventual stdout write
-   is a Phase-3 hook-runtime concern (ADR-027 wording is normative).
+1. Delivery tracking: decisions are terminal domain states; "delivered"
+   facts are audit events until adapters/transport runtimes exist (§14).
+2. `node:sqlite` is experimental on Node 22 (ADR-031 accepted risk; the
+   conformance suite + pragmas/integrity tests make any future driver swap a
+   leaf change). No external driver was added; revisit on Node 24 floor.
+3. E2E/perf tier directories exist but hold no cases yet (by design;
+   testing.md schedule); soak tests (§22/§19 1k-waiter) are a Phase-4/5
+   concern.
+4. Telegram SDK decision (ADR-011) still open — still zero vendor imports.
+5. Claude-Code hook _runtime_ (stdin→stdout bridge) and Codex/Kilo/generic
+   adapters: still skeleton/placeholder (Phase 4+).
+6. The response frames from gateway → client are deliberately NOT MAC'd
+   (outbound); threat model documented in ADR-034 — revisit if a hostile
+   local-user scenario ever matters.
 
-## Next phase — Phase 3 (scope)
+## Next phase — Phase 4 (suggested scope)
 
-1. `tests/fixtures/`: recorded Claude Code hook payloads to pin the real
-   native schema (removes the ADR-027 hand-written-sample caveat).
-2. Loopback transport: `node:http` on 127.0.0.1-only (+bind re-validation
-   via `@raag/config`), bearer token file, size/schema limits through
-   `@raag/protocol`, decision long-poll endpoint, composition-root wiring
-   in `apps/local-gateway`.
-3. Real Claude Code hook bridge (stdin JSON → normalize → block → native
-   decision): adapter package owns the hook script; no command execution
-   (ADR-004 remains absolute).
-4. Policy engine `@raag/policy` local deny-first rules + auto-allow format
-   - expiry scheduler loop (drives `expireDue`).
-5. SQLite `@raag/database` backend — runtime-dep approval ADR first, then
-   `@raag/testing`'s repository conformance suite IS the acceptance gate.
+1. `@raag/policy`: deny-first local rules engine + local-deny irrevocability;
+   feed `ApprovalManager.policy` (port already exists).
+2. Real Claude Code hook bridge script (stdin JSON → GatewayClient → answer
+   the native prompt) + `tests/fixtures/` recorded payload pinning; adapter
+   package owns it; no command execution (ADR-004 absolute); Codex/Kilo
+   adapters become real adapters against the same port.
+3. Telegram channel (ADR-011 SDK pick + chat-ID/HMAC callback intake) —
+   the reason channel/NotificationProvider ports exist unchanged.
+4. Optional relay transport implementing the existing `Transport` port
+   (per-gateway keys, signed frames), split-deployment composition in
+   `apps/relay`.
 
 ## Blocked / pending
 
 - GitHub CI **execution**: git repo exists with Phase 0/1/2 committed;
-  needs a GitHub remote created + pushed (account action, outside a coding
-  phase's mandate).
+  Phase 3 tree is staged-but-uncommitted at report time; a GitHub remote
+  must still be created+pushed (account action, outside a coding phase's
+  mandate).
+- **Claude hook payload samples are hand-written** from documented shapes;
+  no live-CLI validation (ADR-027 honesty; Phase-4 recorded fixtures).

@@ -12,3 +12,11 @@ export {
   redactUnknown,
   isSensitiveFieldName,
 } from './redaction.js';
+export {
+  MAX_CLOCK_SKEW_MS,
+  REPLAY_CACHE_MAX,
+  ReplayGuard,
+  computeMac,
+  verifyMac,
+  type ReplayDecision,
+} from './auth.js';

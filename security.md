@@ -46,8 +46,9 @@
 | -------------------------- | ------------------------------------ | ----------------------------------------- | ------------------------------------------------------------ |
 | Remote                     | Telegram network, other users' chats | hostile                                   | allowlist + HMAC + state machine                             |
 | Agent process              | hook payloads, CLI output            | quasi-hostile (buggy/compromised machine) | schema + size cap + redaction + hashing; same-user IPC token |
+| Local gateway peers (§2b)  | pipe/UDS frame traffic               | authenticated-by-HMAC, still untrusted    | envelope + replay guard + scope re-check + strict protocol   |
 | Local adapter/channel code | runs on gateway host                 | quasi-trusted                             | submits typed events only; core re-validates everything      |
-| Core + policy + storage    | decision truth                       | trusted                                   | single-writer lane; audit-before-deliver                     |
+| Core + policy + storage    | decision truth                       | trusted                                   | single-writer lane; atomic CAS+audit in one txn (ADR-030)    |
 
 Defense in depth: even if the Telegram channel layer were fully compromised,
 the attacker cannot forge `resolve()` without the HMAC secret; even if an
@@ -102,8 +103,38 @@ never calls).
   secrets never routed through these functions, callbacks carrying only opaque
   HMAC-bound tokens not text) are primary.
 
+### 4b. Local gateway authentication + replay (Phase 3 — IMPLEMENTED, ADR-034)
+
+- Transport is **local IPC only** (Windows named pipe / POSIX UDS with a
+  mode-`0600` socket under the per-user name). No TCP listener exists in the
+  gateway at all: LAN exposure is structurally impossible, not merely
+  disallowed by config.
+- **Every inbound frame** must satisfy, in order: size cap (256 KB) →
+  exact-key envelope shape → `HMAC-SHA256(GATEWAY_LOCAL_KEY,
+"raag.local|ts|nonce|canonicalMessage")` verified with a constant-time
+  compare → freshness guard (|now-ts| ≤ ±60 s; seen nonces rejected FIFO in a
+  cache bounded at 4096) → scope re-check (stored `machineId` +
+  `correlationId` must match — mismatches return a uniform `unknown-request`,
+  so one local caller cannot probe/act on another scope).
+- Tampered body fields, forged/wrong-key signatures, replayed frames (same
+  nonce), stale/future timestamps, malformed/unknown field sets: **all fail
+  closed; none ever reaches the application layer, and none can flip a
+  terminal state.** Auth faults close the connection.
+- `GATEWAY_LOCAL_KEY` is required and validated with the ADR-024 entropy
+  rules; it never appears in logs/errors/audit/response frames, and response
+  frames carry identifiers + stable reason codes only.
+- Restart/reconciliation cannot approve (§12 of the spec; ADR-033); shutdown
+  releases waiters without any decision.
+- Honest note: the local key is a shared secret within the user's trust
+  domain — it authenticates frames and blocks accidental/replay misuse (and a
+  non-key local process without pipe/ACL access); OS user separation remains
+  the boundary (ADR-034 explicitly records this; it is not a hardening gap
+  being papered over).
+
 ## 5. What the gateway will never do (v1)
 
 Add users, change policy, read files, run commands, persist raw payloads,
-approve post-expiry, approve across scopes, or talk to any endpoint other than
-api.telegram.org + loopback + configured relays.
+approve post-expiry, approve across scopes, or expose itself over the network;
+it may talk only to local IPC peers (once the channel phases land: Telegram +
+configured relays), and the gateway process itself never executes agent
+commands.

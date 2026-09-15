@@ -3,3 +3,4 @@
  * No transport code (HTTP/relay/Telegram) lives here, only DTOs+parsing.
  */
 export * from './messages.js';
+export * from './local.js';

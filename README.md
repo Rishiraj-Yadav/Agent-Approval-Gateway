@@ -18,10 +18,18 @@ carries opaque approval tokens only, and every failure resolves to deny
   lifecycle machine, decision scopes, branded IDs, risk), the `ApprovalManager`
   application service, in-memory repository (explicitly not crash-persistent),
   validated fail-closed config, redaction + structured logging, untrusted-input
-  protocol DTOs, and the Claude Code adapter **skeleton only**. See
-  [progress.md](progress.md) for exact test/coverage numbers.
+  protocol DTOs, and the Claude Code adapter **skeleton only**.
+- **Phase 3 — durable persistence + local gateway foundation: done** —
+  `node:sqlite` durable store (migrations, WAL+`synchronous=FULL`,
+  `quick_check`-on-open integrity gate), atomic decision+audit in ONE
+  transaction, true CAS concurrency (one winner; immutable-scope pinning),
+  restart reconciliation (never approves), and `apps/local-gateway`
+  (`GatewayCore` + named-pipe/UDS IPC — **no TCP** — with HMAC envelope
+  auth, replay guard, scope re-check, waiters, graceful shutdown).
+  See [progress.md](progress.md) for exact test/coverage numbers.
 - **NOT implemented (planned later phases):** Telegram bot/UI, real agent
-  integration, HTTP/relay transports, SQLite, policy engine, E2E.
+  hook runtimes (Claude/Codex/Kilo), relay transport, HTTP, policy engine,
+  E2E.
 
 | Document                                     | Purpose                                       |
 | -------------------------------------------- | --------------------------------------------- |
@@ -36,7 +44,9 @@ carries opaque approval tokens only, and every failure resolves to deny
 ```
 apps/
   cli/                  operator CLI (install/configure/doctor) — placeholder
-  local-gateway/        main process / composition root — placeholder
+  local-gateway/        ✅ Phase 3 foundation: GatewayCore (authN/authZ/
+                        dispatch) + named-pipe/UDS server + waiters + client
+                        (no Telegram channel yet)
   relay/                multi-machine relay host — placeholder
   telegram-bot/         split-deployment bot process — placeholder
 packages/
@@ -46,11 +56,14 @@ packages/
   adapters/claude-code/ 🦴 SKELETON ONLY (normalization; no agent integration)
   adapters/…            codex/ kilo-code/ generic/ — placeholder; + registry barrel
   telegram/             Telegram channel — NOT IMPLEMENTED (only SDK-allowed package)
-  policy/               NOT IMPLEMENTED (Phase 3)
-  security/             ✅ redaction (string + structural)
-  database/             ✅ in-memory repository; SQLite in DB phase
-  protocol/             ✅ untrusted-input validated DTOs (no transports yet)
-  config/               ✅ fail-closed env validation (loopback bind, HMAC entropy)
+  policy/               NOT IMPLEMENTED (planned: Phase 4)
+  security/             ✅ redaction + HMAC/mac/verify + replay guard (ADR-034)
+  database/             ✅ SQLite store (node:sqlite) + migrations + CAS/audit
+                        txns + conformance vs in-memory
+  protocol/             ✅ raag.v1 wire DTOs + authenticated local envelope
+                        (no HTTP/relay transport code)
+  config/               ✅ fail-closed env validation (loopback bind, HMAC entropy,
+                        GATEWAY_LOCAL_KEY / GATEWAY_IPC_PATH)
   logging/              ✅ redacting structured logger
   testing/              ✅ fake clock, fixtures, repository conformance suite
 tests/

@@ -16,6 +16,7 @@ describe('protocol builders (decision/reject)', () => {
     const d = buildDecisionMessage({
       requestId: 'req-b1',
       correlationId: 'corr-b1',
+      machineId: 'mach-b1',
       decision: 'allow-session',
       token: 'tokval123456',
     });
@@ -59,14 +60,18 @@ describe('protocol builders (decision/reject)', () => {
 });
 
 describe('manager additional branches', () => {
-  it('get() on unknown returns undefined; expireDue on empty returns 0', async () => {
+  it('get() on unknown returns undefined; expireDue on empty returns []', async () => {
     const mgr = new ApprovalManager({
       repository: new InMemoryApprovalRepository(),
       clock: createFakeClock(10),
       audit: new InMemoryAuditSink(),
     });
     expect(await mgr.get(parseRequestId('req-nope'))).toBeUndefined();
-    expect(await mgr.expireDue()).toBe(0);
+    expect(await mgr.expireDue()).toEqual([]);
+    const rec = await mgr.reconcile();
+    expect(rec.expired).toEqual([]);
+    expect(rec.abandoned).toEqual([]);
+    expect(rec.stillPending).toBe(0);
   });
 
   it('submit with invalid input returns rejected and logs submit-rejected (no repo write)', async () => {

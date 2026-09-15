@@ -49,6 +49,8 @@ export interface DecisionMessage {
   /** Opaque — a channel callback token. NEVER parsed/executed. */
   readonly requestId: string;
   readonly correlationId: string;
+  /** ADR-034: every frame asserts the scope it acts on (server re-checks). */
+  readonly machineId: string;
   readonly decision: 'allow-once' | 'allow-session' | 'deny' | 'stop-agent';
   readonly token: string;
 }
@@ -60,8 +62,17 @@ export interface RejectMessage {
   readonly reasonCode: string; // stable code; never free-form hostile text
 }
 
+/** Gateway-local lifecycle probes/commands (authenticated by envelope MAC). */
+export interface RequestScopeMessage {
+  readonly v: typeof PROTOCOL_VERSION;
+  readonly kind: 'status' | 'cancel' | 'agent-disconnected';
+  readonly requestId: string;
+  readonly correlationId: string;
+  readonly machineId: string;
+}
+
 export type OutboundMessage = SubmitMessage | DecisionMessage | RejectMessage;
-export type InboundMessage = SubmitMessage | DecisionMessage | RejectMessage;
+export type InboundMessage = SubmitMessage | DecisionMessage | RejectMessage | RequestScopeMessage;
 
 export type ParseResult =
   | { readonly ok: true; readonly message: InboundMessage }
@@ -106,8 +117,11 @@ const EXACT: Record<InboundMessage['kind'], readonly string[]> = {
     'requestedAtMs',
     'ttlSeconds',
   ],
-  decision: ['v', 'kind', 'requestId', 'correlationId', 'decision', 'token'],
+  decision: ['v', 'kind', 'requestId', 'correlationId', 'machineId', 'decision', 'token'],
   reject: ['v', 'kind', 'requestId', 'reasonCode'],
+  status: ['v', 'kind', 'requestId', 'correlationId', 'machineId'],
+  cancel: ['v', 'kind', 'requestId', 'correlationId', 'machineId'],
+  'agent-disconnected': ['v', 'kind', 'requestId', 'correlationId', 'machineId'],
 };
 
 function hasExactKeys(obj: Record<string, unknown>, list: readonly string[]): boolean {
@@ -129,13 +143,15 @@ export function parseMessage(input: unknown): ParseResult {
   if (!isRecord(input)) return reject('not-an-object');
   if (input['v'] !== PROTOCOL_VERSION) return reject('bad-version');
   const kind = input['kind'];
-  if (kind !== 'submit' && kind !== 'decision' && kind !== 'reject') return reject('bad-kind');
-  if (!hasExactKeys(input, EXACT[kind])) return reject('exact-field-set-violation');
+  const validKinds = ['submit', 'decision', 'reject', 'status', 'cancel', 'agent-disconnected'];
+  if (typeof kind !== 'string' || !validKinds.includes(kind)) return reject('bad-kind');
+  const narrowed = kind as InboundMessage['kind'];
+  if (!hasExactKeys(input, EXACT[narrowed])) return reject('exact-field-set-violation');
 
   const requestId = id(input['requestId']);
   if (requestId === undefined) return reject('bad-identifiers');
 
-  if (kind === 'reject') {
+  if (narrowed === 'reject') {
     const reasonCode = str(input['reasonCode']);
     if (reasonCode === undefined || !/^[a-z][a-z0-9._-]{1,63}$/.test(reasonCode)) {
       return reject('bad-reason-code');
@@ -146,10 +162,27 @@ export function parseMessage(input: unknown): ParseResult {
   const correlationId = id(input['correlationId']);
   if (correlationId === undefined) return reject('bad-identifiers');
 
+  if (narrowed === 'status' || narrowed === 'cancel' || narrowed === 'agent-disconnected') {
+    const machineId = id(input['machineId']);
+    if (machineId === undefined) return reject('bad-scope-ids');
+    return {
+      ok: true,
+      message: {
+        v: PROTOCOL_VERSION,
+        kind: narrowed,
+        requestId,
+        correlationId,
+        machineId,
+      },
+    };
+  }
+
   if (kind === 'decision') {
     const decision = input['decision'];
     const valid = ['allow-once', 'allow-session', 'deny', 'stop-agent'];
     if (typeof decision !== 'string' || !valid.includes(decision)) return reject('bad-decision');
+    const decisionMachineId = id(input['machineId']);
+    if (decisionMachineId === undefined) return reject('bad-identifiers');
     const token = input['token'];
     if (
       typeof token !== 'string' ||
@@ -167,6 +200,7 @@ export function parseMessage(input: unknown): ParseResult {
         kind: 'decision',
         requestId,
         correlationId,
+        machineId: decisionMachineId,
         decision: decision as DecisionMessage['decision'],
         token,
       },

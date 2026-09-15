@@ -7,6 +7,7 @@ import type {
   Millis,
   PolicyOutcome,
   RequestId,
+  TransactionScope,
 } from '@raag/domain';
 import {
   advance,
@@ -52,6 +53,13 @@ export interface ApprovalManagerDeps {
   readonly policy?: PolicyEngine | undefined;
   /** Absent NotificationProvider = headless mode (tests/foundation). */
   readonly notifier?: NotificationProvider | undefined;
+  /**
+   * Durable stores provide ONE transaction for state-write + audit-append
+   * (ADR-030). Absent (in-memory/headless) → the manager falls back to the
+   * prevention order audit-then-store; with a store, nothing is ever
+   * half-applied.
+   */
+  readonly tx?: TransactionScope | undefined;
 }
 
 export class ApprovalManager {
@@ -149,18 +157,55 @@ export class ApprovalManager {
   }
 
   /**
-   * Expiry sweep — a later scheduler owns WHEN to call this; this owns what.
-   * Expired == deny-equivalent terminal state; this never approves.
+   * Expiry sweep — a scheduler (gateway) owns WHEN to call this; this owns
+   * what. Expired == deny-equivalent terminal state; this NEVER approves.
+   * Returns the ids that transitioned (so callers can notify waiters).
    */
-  async expireDue(now: Millis = this.now()): Promise<number> {
+  async expireDue(now: Millis = this.now()): Promise<readonly RequestId[]> {
     const pending = await this.deps.repository.listPending();
-    let expired = 0;
+    const expired: RequestId[] = [];
     for (const req of pending) {
       if (!shouldExpireAt(req, now)) continue;
       const result = await this.settleExisting(req.requestId, { type: 'expired', now });
-      if (result.outcome === 'advanced') expired += 1;
+      if (result.outcome === 'advanced') expired.push(req.requestId);
     }
     return expired;
+  }
+
+  /**
+   * Startup reconciliation (architecture.md §14 crash notes, Phase 3 §12).
+   * NEVER approves anything:
+   *  - `pending` rows whose TTL elapsed while the gateway was down →
+   *    `expired` (deny-equivalent), audited per request;
+   *  - `created` rows (crashed between durable insert and the pending
+   *    transition) → `failed` persistence-error (deny-equivalent);
+   *  - everything already terminal is left byte-for-byte as-is.
+   */
+  async reconcile(now: Millis = this.now()): Promise<{
+    readonly expired: readonly RequestId[];
+    readonly abandoned: readonly RequestId[];
+    readonly stillPending: number;
+  }> {
+    const expired = await this.expireDue(now);
+    const abandoned: RequestId[] = [];
+    const live = await this.deps.repository.listLive();
+    for (const req of live) {
+      if (req.state !== 'created') continue;
+      const advanced = advance(req, {
+        type: 'failed',
+        code: 'persistence-error',
+        now,
+      });
+      if (advanced.kind !== 'advanced') continue;
+      const res = await this.commitTransition(advanced.request, req.version, {
+        type: 'failed',
+        code: 'persistence-error',
+        now,
+      });
+      if (res.outcome === 'advanced') abandoned.push(req.requestId);
+    }
+    const stillPending = (await this.deps.repository.listPending()).length;
+    return { expired, abandoned, stillPending };
   }
 
   async get(requestId: RequestId): Promise<ApprovalRequest | undefined> {
@@ -208,26 +253,60 @@ export class ApprovalManager {
         });
         return { outcome: 'rejected', request: existing, reason: result.reason };
       }
-      case 'advanced': {
-        // AUDIT-BEFORE-STORE (architecture.md §17): if the durable audit of
-        // the decision fails, nothing is stored — the request stays pending
-        // and expires deny-closed. Terminal states can never be "reverted"
-        // (state machine rule), so prevention, not rollback, is the design.
-        try {
-          await this.auditTransitionEvent(result.request, event);
-        } catch {
-          return { outcome: 'audit-failed', reason: 'audit-before-deliver' };
-        }
-        const cas = await this.deps.repository.compareAndSwap(result.request, existing.version);
-        if (cas !== 'updated') {
-          // a concurrent writer won the race; the DB phase will serialize this
-          // (documented at the repository port). Never double-commit.
-          await this.auditEvent('state-write-conflict', 'warn', { request: existing });
-          const current = await this.deps.repository.findById(requestId);
-          return { outcome: 'conflict', request: current, reason: 'repository-version-conflict' };
-        }
-        return { outcome: 'advanced', request: result.request };
+      case 'advanced':
+        return this.commitTransition(result.request, existing.version, event);
+    }
+  }
+
+  /**
+   * Commit a state transition + its audit record ATOMICALLY (ADR-030).
+   * With a TransactionScope present: CAS then audit inside one database
+   * transaction — an audit failure rolls the state write back (never
+   * "approved but unaudited"), and CAS conflicts roll back their conflict
+   * audit as a no-op write. Without a scope (in-memory reference store):
+   * prevention ordering — audit first; if that throws, nothing is stored.
+   */
+  async commitTransition(
+    next: ApprovalRequest,
+    expectedVersion: number,
+    event: LifecycleEvent,
+  ): Promise<ResolveResult> {
+    if (this.deps.tx === undefined) {
+      // legacy audit-before-store prevention path (in-memory stores)
+      try {
+        await this.auditTransitionEvent(next, event);
+      } catch {
+        return { outcome: 'audit-failed', reason: 'audit-before-deliver' };
       }
+      const cas = await this.deps.repository.compareAndSwap(next, expectedVersion);
+      if (cas !== 'updated') {
+        await this.auditEvent('state-write-conflict', 'warn', { request: next });
+        const current = await this.deps.repository.findById(next.requestId);
+        return { outcome: 'conflict', request: current, reason: 'repository-version-conflict' };
+      }
+      return { outcome: 'advanced', request: next };
+    }
+
+    const work = async (): Promise<ResolveResult> => {
+      const cas = await this.deps.repository.compareAndSwap(next, expectedVersion);
+      if (cas !== 'updated') {
+        const current = await this.deps.repository.findById(next.requestId);
+        return {
+          outcome: 'conflict',
+          request: current,
+          reason: `repository-${cas}`,
+        };
+      }
+      await this.auditTransitionEvent(next, event); // throws → rollback
+      return { outcome: 'advanced', request: next };
+    };
+
+    try {
+      return await this.deps.tx.run(work);
+    } catch {
+      // database/audit failure: transaction rolled back, NOTHING committed —
+      // the request stays in its previous state and expires deny-closed.
+      return { outcome: 'audit-failed', reason: 'transaction-rolled-back' };
     }
   }
 
@@ -246,16 +325,12 @@ export class ApprovalManager {
   ): Promise<ApprovalRequest | undefined> {
     const result = advance(request, event);
     if (result.kind !== 'advanced') return undefined;
-    try {
-      await this.auditTransitionEvent(result.request, event);
-    } catch {
-      // same audit-before-store discipline; caller keeps the pre-transition state
-      return undefined;
-    }
-    const cas = await this.deps.repository.compareAndSwap(result.request, request.version);
-    if (cas === 'updated') return result.request;
-    const fresh = await this.deps.repository.findById(request.requestId);
-    return fresh ?? request;
+    const committed = await this.commitTransition(result.request, request.version, event);
+    if (committed.outcome === 'advanced') return result.request;
+    if (committed.outcome === 'conflict') return committed.request;
+    // audit/store failure: caller keeps the pre-transition record (pending
+    // rows still expire later; nothing half-applied)
+    return undefined;
   }
 
   private async auditTransitionEvent(

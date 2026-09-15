@@ -11,8 +11,10 @@
 - **npm 10 workspaces** (`packages/*`, `packages/adapters/*`, `apps/*`);
   package spec `*` for internal deps — `workspace:` protocol is not linked
   reliably by npm 10 (ADR in decisions.md).
-- **No runtime dependencies** in Phase 1; every install must be justified in
-  decisions.md (ADR-017).
+- **No runtime dependencies — still true.** The SQLite layer uses Node's
+  built-in `node:sqlite` (ADR-031). Dev-only tooling additions (eslint 10,
+  vitest 5 + `@vitest/coverage-v8`) are recorded in decisions.md (ADR-014/
+  015/029); every install must be justified in decisions.md (ADR-017).
 - **No git history** yet; CI workflow exists but has not executed remotely.
 
 ## Conventions
@@ -50,8 +52,13 @@
   security, decisions, testing docs.
 - **Phase 1 — Repository bootstrap** (done): toolchain, workspaces, CI,
   placeholder packages/apps only. **No product implementation.**
-- **Phase 2 — Core**: domain model, approval state machine, ports, in-memory
-  repo, config/security/logging packages. **DONE — see progress.md.**
-- **Phase 3 — Adapters**: Claude Code, Codex, Kilo Code adapters; policy
-  engine; loopback + relay transports; SQLite repository.
-- **Phase 4 — Hardening**: Telegram channel, E2E flow, production config.
+- **Phase 2 — Core** (done): domain model, approval state machine, ports,
+  in-memory repo, config/security/logging packages.
+- **Phase 3 — Durable persistence & local gateway foundation** (done):
+  `node:sqlite` store + migrations + atomic CAS/audit transactions, restart
+  reconciliation, local IPC (pipe/UDS) with HMAC envelope auth + replay
+  guard, waiters/shutdown, `apps/local-gateway` composition.
+- **Phase 4 — Adapters**: Claude Code hook runtime + recorded fixtures,
+  Codex, Kilo, generic adapters; policy engine; transports.
+- **Phase 5+ — Channel/Hardening**: Telegram channel (ADR-011), E2E flow,
+  production config.

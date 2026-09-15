@@ -110,6 +110,7 @@ describe('untrusted input handling (fail closed)', () => {
       kind: 'decision',
       requestId: 'req-01',
       correlationId: 'toolu-01',
+      machineId: 'mach-1',
       decision: 'deny',
       token: 'AbCdEf_123456-ABCDEF',
     } as const;
@@ -132,6 +133,7 @@ describe('untrusted input handling (fail closed)', () => {
         kind: 'decision',
         requestId: 'req-1',
         correlationId: 'corr-1',
+        machineId: 'mach-1',
         decision: 'deny',
         token: t,
       });

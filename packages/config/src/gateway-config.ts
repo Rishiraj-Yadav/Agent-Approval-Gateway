@@ -24,7 +24,15 @@ export interface GatewayConfig {
     /** Validated loopback literal. Non-loopback binds never reach callers. */
     readonly host: '127.0.0.1' | 'localhost' | '::1';
     readonly port: number;
-    readonly tokenFilePath: string;
+    /** ADR-034: pipe/UDS mode is the default transport; the bearer-token-file
+     * option (ADR-008 TCP fallback) is now optional. */
+    readonly tokenFilePath?: string | undefined;
+    /** Local IPC endpoint (named pipe / UDS path). Derived when absent. */
+    readonly ipcPath?: string | undefined;
+    /** HMAC key authenticating every local IPC frame (ADR-034). Required. */
+    readonly localKey: string;
+    /** Override for the expiry-sweep cadence; derived default in gateway. */
+    readonly sweepIntervalMs?: number | undefined;
   };
   readonly approvals: {
     readonly ttlSeconds: number;
@@ -59,7 +67,10 @@ export const CONFIG_FIELD_NAMES = [
   'APPROVAL_HMAC_KEY',
   'GATEWAY_HOST',
   'GATEWAY_PORT',
+  'GATEWAY_IPC_PATH',
   'GATEWAY_TOKEN_FILE',
+  'GATEWAY_LOCAL_KEY',
+  'GATEWAY_SWEEP_MS',
   'APPROVAL_TTL_SECONDS',
   'GATEWAY_DB_PATH',
   'RELAY_URL',
@@ -122,9 +133,35 @@ export function parseConfig(env: Record<string, string | undefined>): ConfigResu
 
   const port = parseBoundedInt(env.GATEWAY_PORT, 'GATEWAY_PORT', 0, 65_535, 0, errors);
   const tokenFile = (env.GATEWAY_TOKEN_FILE ?? '').trim();
-  if (tokenFile.length === 0) {
-    fail('GATEWAY_TOKEN_FILE', 'required: local gateway bearer-token file path');
+  const ipcPath = (env.GATEWAY_IPC_PATH ?? '').trim();
+  if (
+    ipcPath.length > 0 &&
+    // eslint-disable-next-line no-control-regex
+    (ipcPath.length > 260 || /[\u0000-\u001f\u007f]/.test(ipcPath))
+  ) {
+    fail(
+      'GATEWAY_IPC_PATH',
+      'when set must be <=260 printable chars (named pipe or absolute UDS path)',
+    );
   }
+  const localKey = env.GATEWAY_LOCAL_KEY ?? '';
+  if (localKey.length === 0) {
+    fail(
+      'GATEWAY_LOCAL_KEY',
+      'required: local gateway frames must be authenticated (ADR-034, fail closed)',
+    );
+  } else {
+    const localInfo = checkHmacEntropy(localKey);
+    if (!localInfo.ok) {
+      fail('GATEWAY_LOCAL_KEY', localInfo.reason);
+    }
+  }
+
+  const sweepRaw = (env.GATEWAY_SWEEP_MS ?? '').trim();
+  const sweepIntervalMs =
+    sweepRaw.length === 0
+      ? undefined
+      : parseBoundedInt(env.GATEWAY_SWEEP_MS, 'GATEWAY_SWEEP_MS', 100, 600_000, 0, errors);
 
   const ttl = parseBoundedInt(
     env.APPROVAL_TTL_SECONDS,
@@ -179,7 +216,14 @@ export function parseConfig(env: Record<string, string | undefined>): ConfigResu
     config: {
       telegram: { botToken, allowedChatIds },
       security: { approvalHmacKey: hmac },
-      gateway: { host, port: portValue, tokenFilePath: tokenFile },
+      gateway: {
+        host,
+        port: portValue,
+        ...(tokenFile.length === 0 ? {} : { tokenFilePath: tokenFile }),
+        ...(ipcPath.length === 0 ? {} : { ipcPath }),
+        ...(sweepIntervalMs === undefined ? {} : { sweepIntervalMs }),
+        localKey,
+      },
       approvals: { ttlSeconds: ttlValue },
       storage: { dbPath },
       ...(relay === undefined ? {} : { relay }),

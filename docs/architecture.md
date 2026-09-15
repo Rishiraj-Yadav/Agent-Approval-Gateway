@@ -253,6 +253,18 @@ Key design points:
 
 ## 9. Local Gateway
 
+**Status (Phase 3): the durable foundation is IMPLEMENTED in
+`apps/local-gateway`** (ADR-030/033/034). The current listener is **local IPC
+with HMAC-authenticated envelope frames** (Windows named pipe / POSIX UDS),
+NOT yet the HTTP loopback described below — the HTTP surface is deferred to
+the adapter-runtime phase because nothing consumes it until hook scripts
+exist; the security envelope is transport-independent and will also front any
+later TCP fallback. Implemented behaviors: strict NDJSON framing, per-frame
+HMAC over `ts|nonce|canonicalMessage` with constant-time verify + bounded
+replay/skew guard, stored-data scope re-check, waiter registry keyed by
+requestId, connection+body caps, and startup reconciliation (ADR-033). The
+original design (kept for the HTTP phase):
+
 The **local gateway** is the process running on the machine where agents run.
 In the default single-machine deployment (§19a) it _is_ the whole modular
 monolith. In the split deployment it is the agent-facing half: adapters +
@@ -300,6 +312,19 @@ agents run on servers.
   the state machine does not know which is in use.
 
 ## 11. Database
+
+**Status (Phase 3): IMPLEMENTED** in `@raag/database` — durable ledger on
+Node's built-in `node:sqlite` (ADR-031 amends this section's original
+`better-sqlite3` assumption: zero runtime dependencies, native-compilation
+avoided on the Windows CI matrix; the Repository/AuditSink/TransactionScope
+ports keep a driver swap a leaf change). Implemented tables are
+`approval_requests` (branded ids, immutable scope columns, `revision` for
+CAS, decision/failure columns + CHECK coherence) and `audit_events`
+(seq/autoincrement, canonical sorted-key `detail_json`, indexed by
+request); `PRAGMA user_version` drives forward-only migrations (ADR-032);
+WAL + `synchronous=FULL` + `quick_check`-on-open + 5 s busy timeout make
+committed decisions durable and corrupt DBs serve nothing. The sketch below
+is superseded by the migrations file, kept only as the design intent:
 
 **Embedded SQLite** via `better-sqlite3` (ADR-009) — synchronous API (matches
 the single-threaded concurrency model, §18), zero server ops, transactional,
