@@ -1,0 +1,42 @@
+{
+  "name": "@raag/root",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Remote Agent Approval Gateway — secure remote human-approval gateway for AI coding agents (Telegram-only v1 UI).",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "packages/*",
+    "packages/adapters/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --force && tsc -p tsconfig.dev.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --project unit --project integration --project security",
+    "test:watch": "vitest --project unit",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:security": "vitest run --project security",
+    "test:e2e": "vitest run --project e2e",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build",
+    "clean": "node scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.0.0",
+    "prettier": "^3.9.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.0"
+  }
+}

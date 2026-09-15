@@ -1,0 +1,25 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/domain" },
+    { "path": "packages/security" },
+    { "path": "packages/logging" },
+    { "path": "packages/config" },
+    { "path": "packages/protocol" },
+    { "path": "packages/policy" },
+    { "path": "packages/database" },
+    { "path": "packages/telegram" },
+    { "path": "packages/testing" },
+    { "path": "packages/adapters/claude-code" },
+    { "path": "packages/adapters/codex" },
+    { "path": "packages/adapters/kilo-code" },
+    { "path": "packages/adapters/generic" },
+    { "path": "packages/adapters" },
+    { "path": "packages/application" },
+    { "path": "packages/core" },
+    { "path": "apps/cli" },
+    { "path": "apps/local-gateway" },
+    { "path": "apps/relay" },
+    { "path": "apps/telegram-bot" }
+  ]
+}

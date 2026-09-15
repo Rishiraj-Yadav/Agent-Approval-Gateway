@@ -1,0 +1,39 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@raag/core": ["packages/core/src/index.ts"],
+      "@raag/domain": ["packages/domain/src/index.ts"],
+      "@raag/application": ["packages/application/src/index.ts"],
+      "@raag/adapters": ["packages/adapters/src/index.ts"],
+      "@raag/claude-code": ["packages/adapters/claude-code/src/index.ts"],
+      "@raag/codex": ["packages/adapters/codex/src/index.ts"],
+      "@raag/kilo-code": ["packages/adapters/kilo-code/src/index.ts"],
+      "@raag/generic": ["packages/adapters/generic/src/index.ts"],
+      "@raag/telegram": ["packages/telegram/src/index.ts"],
+      "@raag/policy": ["packages/policy/src/index.ts"],
+      "@raag/security": ["packages/security/src/index.ts"],
+      "@raag/database": ["packages/database/src/index.ts"],
+      "@raag/protocol": ["packages/protocol/src/index.ts"],
+      "@raag/config": ["packages/config/src/index.ts"],
+      "@raag/logging": ["packages/logging/src/index.ts"],
+      "@raag/testing": ["packages/testing/src/index.ts"],
+      "@raag/cli": ["apps/cli/src/index.ts"],
+      "@raag/local-gateway": ["apps/local-gateway/src/index.ts"],
+      "@raag/relay": ["apps/relay/src/index.ts"],
+      "@raag/telegram-bot": ["apps/telegram-bot/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/*/src",
+    "packages/adapters/*/src",
+    "apps/*/src",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
+}
