@@ -1,10 +1,7 @@
 /**
- * @raag/claude-code — Claude Code AgentAdapter: PreToolUse/permission-hook JSON on stdio ↔ ApprovalRequest normalization. No policy logic (ADR-005).
- *
- * Phase 1 scaffold: placeholders only. Implementation per
- * docs/architecture.md lands in Phase 2+.
+ * @raag/claude-code — SKELETON ONLY boundary package (normalized hook DTOs),
+ * re-exported. No Claude Code integration is wired or tested here; see
+ * tests/fixtures + architecture §19 for later phases. Imports are limited
+ * to @raag/domain + @raag/security + Node's own crypto.
  */
-import { packageName as domain } from '@raag/domain';
-
-export const packageName = '@raag/claude-code' as const;
-export const builtOn = domain;
+export * from './normalize.js';

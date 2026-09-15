@@ -11,6 +11,42 @@
     },
     {
       "path": "../logging"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../logging"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../logging"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../logging"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../database"
     }
   ]
 }

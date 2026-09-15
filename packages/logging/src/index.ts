@@ -1,7 +1,7 @@
 /**
- * @raag/logging — Structured, redaction-aware logging. Sinks are plain writer functions so tests can capture output without files or sockets.
- *
- * Phase 1 scaffold: placeholders only. Implementation per
- * docs/architecture.md lands in Phase 2+.
+ * @raag/logging — structured, redaction-enforced logging primitives.
+ * Sinks are plain writer functions (console/test capture today; no backend
+ * is implemented here by design).
  */
-export const packageName = '@raag/logging' as const;
+export * from './logger.js';
+export { packageName } from './logger.js';

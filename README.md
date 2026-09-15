@@ -13,10 +13,15 @@ carries opaque approval tokens only, and every failure resolves to deny
 ## Status
 
 - **Phase 0 — architecture: done** ([docs/architecture.md](docs/architecture.md))
-- **Phase 1 — repository bootstrap: done** (monorepo, strict TS, lint, format,
-  Vitest, CI; zero runtime dependencies — see
-  [decisions.md](decisions.md) ADR-013…019)
-- **Phase 2+ — no product behavior implemented yet**
+- **Phase 1 — repository bootstrap: done**
+- **Phase 2 — core foundation: done** — framework-independent domain (8-state
+  lifecycle machine, decision scopes, branded IDs, risk), the `ApprovalManager`
+  application service, in-memory repository (explicitly not crash-persistent),
+  validated fail-closed config, redaction + structured logging, untrusted-input
+  protocol DTOs, and the Claude Code adapter **skeleton only**. See
+  [progress.md](progress.md) for exact test/coverage numbers.
+- **NOT implemented (planned later phases):** Telegram bot/UI, real agent
+  integration, HTTP/relay transports, SQLite, policy engine, E2E.
 
 | Document                                     | Purpose                                       |
 | -------------------------------------------- | --------------------------------------------- |
@@ -35,12 +40,19 @@ apps/
   relay/                multi-machine relay host — placeholder
   telegram-bot/         split-deployment bot process — placeholder
 packages/
-  domain/               types + ports + state machine (imports nothing)
-  application/          Approval Manager use-cases (ports only)
-  core/                 facade barrel for apps
-  adapters/             claude-code/ codex/ kilo-code/ generic/ + barrel
-  telegram/             Telegram channel (only place the SDK may appear)
-  policy/ security/ database/ protocol/ config/ logging/ testing/
+  domain/               ✅ types, ports, 8-state machine (imports nothing external)
+  application/          ✅ ApprovalManager + interaction ports
+  core/                 facade barrel for apps — placeholder wiring
+  adapters/claude-code/ 🦴 SKELETON ONLY (normalization; no agent integration)
+  adapters/…            codex/ kilo-code/ generic/ — placeholder; + registry barrel
+  telegram/             Telegram channel — NOT IMPLEMENTED (only SDK-allowed package)
+  policy/               NOT IMPLEMENTED (Phase 3)
+  security/             ✅ redaction (string + structural)
+  database/             ✅ in-memory repository; SQLite in DB phase
+  protocol/             ✅ untrusted-input validated DTOs (no transports yet)
+  config/               ✅ fail-closed env validation (loopback bind, HMAC entropy)
+  logging/              ✅ redacting structured logger
+  testing/              ✅ fake clock, fixtures, repository conformance suite
 tests/
   unit/ integration/ security/ e2e/ fixtures/
 docs/architecture.md    canonical architecture
@@ -48,16 +60,17 @@ docs/architecture.md    canonical architecture
 
 ## Commands
 
-| Command                           | What it does                                |
-| --------------------------------- | ------------------------------------------- |
-| `npm install`                     | link 20 workspaces, install dev toolchain   |
-| `npm run typecheck`               | `tsc -b --force` + noEmit check incl. tests |
-| `npm run lint` / `lint:fix`       | ESLint flat config (incl. dependency rules) |
-| `npm run format` / `format:check` | Prettier                                    |
-| `npm test`                        | Vitest: unit + integration + security tiers |
-| `npm run build`                   | `tsc -b` → `dist/` in every package         |
-| `npm run check`                   | the whole CI chain locally                  |
-| `npm run clean`                   | remove build outputs                        |
+| Command                           | What it does                                      |
+| --------------------------------- | ------------------------------------------------- |
+| `npm install`                     | link 20 workspaces, install dev toolchain         |
+| `npm run typecheck`               | `tsc -b --force` + noEmit check incl. tests       |
+| `npm run lint` / `lint:fix`       | type-aware ESLint (incl. architecture rules)      |
+| `npm run format` / `format:check` | Prettier                                          |
+| `npm test`                        | Vitest: unit + integration + security tiers       |
+| `npm run test:coverage`           | same + ADR-029 coverage floors (what CI enforces) |
+| `npm run build`                   | `tsc -b` → `dist/` in every package               |
+| `npm run check`                   | full CI chain locally (incl. coverage)            |
+| `npm run clean`                   | remove build outputs                              |
 
 ## Requirements
 

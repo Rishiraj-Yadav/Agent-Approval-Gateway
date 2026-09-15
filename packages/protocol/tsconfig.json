@@ -8,6 +8,24 @@
   "references": [
     {
       "path": "../domain"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
     }
   ]
 }

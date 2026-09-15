@@ -32,8 +32,8 @@ jobs:
       - name: Format check
         run: npm run format:check
 
-      - name: Tests (unit + security tiers)
-        run: npm test
+      - name: Tests (unit + integration + security tiers, coverage floors)
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build

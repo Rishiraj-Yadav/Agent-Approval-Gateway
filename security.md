@@ -75,16 +75,34 @@ never calls).
 - **Malicious agent payload → SQL:** repository uses prepared statements only;
   raw payloads aren't persisted.
 
-## 4. Secrets handling
+## 4. Secrets handling (Phase 2 — IMPLEMENTED in `@raag/config` + `@raag/security`)
 
-- Sources: `TELEGRAM_BOT_TOKEN`, `APPROVAL_HMAC_KEY`,
-  `RELAY_GATEWAY_KEYS` — env only, never config file, never committed
-  (`.gitignore` covers `.env*`; `.env.example` carries placeholders).
-- Startup validates presence and entropy (≥32 bytes for HMAC key) or exits.
-- `packages/security` exports the canonical redaction patterns applied to any
-  string before it leaves the process toward Telegram, logs, or DB.
+- Sources: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_CHAT_IDS`,
+  `APPROVAL_HMAC_KEY`, `RELAY_GATEWAY_KEY` — env only, never a config file,
+  never committed (`.gitignore` covers `.env*`; `.env.example` carries empty
+  placeholders checked by `tests/security/fail-closed.test.ts`).
+- `parseConfig`/`loadGatewayConfig` validate at startup and FAIL CLOSED with
+  field-name-only errors (no values echoed — asserted by tests):
+  - `APPROVAL_HMAC_KEY`: non-empty, ≥32 characters, not trivially
+    (single-repeated) or placeholder-words, Shannon ≥3.5 bits/char
+    ("entropy floor chosen; exact algorithm documented in ADR-024 — it is
+    a sanity gate, not a strength proof; generated 32-byte random keys pass
+    easily and this is documented in `.env.example` comments on use of
+    `openssl rand -hex 32`-style generation);
+  - `GATEWAY_HOST`: exactly `127.0.0.1`, `localhost` or `::1` — ANY other
+    literal, including `0.0.0.0` and `::`, is a hard fatal error (never
+    downgraded). `GATEWAY_PORT` bounded 0..65535;
+  - `APPROVAL_TTL_SECONDS`: 1..3600 (cap documented ADR-023; default 120);
+  - Relay pairs all-or-nothing, https only.
+- `packages/security` exports deterministic+idempotent `redactString` /
+  `redactUnknown` (patterns: PEM/JWT/bot tokens/AWS/bearer/authorization
+  headers/sensitive kv/long base64) plus sensitive FIELD-name replacement in
+  nested structures. **Limit, stated openly:** pattern-based redaction is
+  best-effort; the structural guarantees (payloads hashed and discarded,
+  secrets never routed through these functions, callbacks carrying only opaque
+  HMAC-bound tokens not text) are primary.
 
-## 5. What the system explicitly cannot do (v1)
+## 5. What the gateway will never do (v1)
 
 Add users, change policy, read files, run commands, persist raw payloads,
 approve post-expiry, approve across scopes, or talk to any endpoint other than

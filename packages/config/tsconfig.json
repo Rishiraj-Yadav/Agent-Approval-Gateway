@@ -4,5 +4,25 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
+    },
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../security"
+    }
+  ]
 }

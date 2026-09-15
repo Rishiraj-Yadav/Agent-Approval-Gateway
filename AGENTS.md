@@ -32,16 +32,17 @@
 
 ## Commands
 
-| Command             | Purpose                                       |
-| ------------------- | --------------------------------------------- |
-| `npm install`       | Install dev toolchain, link workspaces        |
-| `npm run typecheck` | `tsc -b --force` + `tsc -p tsconfig.dev.json` |
-| `npm run lint`      | ESLint over all workspaces                    |
-| `npm run format`    | Prettier write (`format:check` in CI)         |
-| `npm test`          | Vitest unit + integration + security tiers    |
-| `npm run build`     | `tsc -b` → `dist/` per package                |
-| `npm run check`     | full CI chain locally                         |
-| `npm run clean`     | remove build outputs                          |
+| Command                 | Purpose                                       |
+| ----------------------- | --------------------------------------------- |
+| `npm install`           | Install dev toolchain, link workspaces        |
+| `npm run typecheck`     | `tsc -b --force` + `tsc -p tsconfig.dev.json` |
+| `npm run lint`          | ESLint over all workspaces                    |
+| `npm run format`        | Prettier write (`format:check` in CI)         |
+| `npm test`              | Vitest unit + integration + security tiers    |
+| `npm run test:coverage` | same + enforced coverage floors (CI gate)     |
+| `npm run build`         | `tsc -b` → `dist/` per package                |
+| `npm run check`         | full CI chain locally                         |
+| `npm run clean`         | remove build outputs                          |
 
 ## Phase roadmap
 
@@ -50,7 +51,7 @@
 - **Phase 1 — Repository bootstrap** (done): toolchain, workspaces, CI,
   placeholder packages/apps only. **No product implementation.**
 - **Phase 2 — Core**: domain model, approval state machine, ports, in-memory
-  repo, config/security/logging packages.
+  repo, config/security/logging packages. **DONE — see progress.md.**
 - **Phase 3 — Adapters**: Claude Code, Codex, Kilo Code adapters; policy
   engine; loopback + relay transports; SQLite repository.
 - **Phase 4 — Hardening**: Telegram channel, E2E flow, production config.

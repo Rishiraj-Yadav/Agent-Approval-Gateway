@@ -1,12 +1,11 @@
 /**
- * @raag/testing — Shared test harness: fixed Clock, fakes for ports,
- * in-memory transports, and repo-introspection helpers used by the
- * foundation tier. Test-facing public API only.
+ * @raag/testing — Shared test harness (ADR-015): deterministic fake clock,
+ * fixed id generator, collecting audit sink, domain-object fixtures, and the
+ * repository conformance suite every approval-store implementation must pass.
+ *
+ * This is the ONLY package allowed to import the test framework.
  */
-import { packageName as domainPkg } from '@raag/domain';
-import { packageName as loggingPkg } from '@raag/logging';
-
+export { workspaceManifests, readJson, type PackageJson } from './repo.js';
+export * from './harness.js';
+export { runRepositoryConformance } from './repository-conformance.js';
 export const packageName = '@raag/testing' as const;
-export const builtOn = [domainPkg, loggingPkg] as const;
-
-export * from './repo.js';

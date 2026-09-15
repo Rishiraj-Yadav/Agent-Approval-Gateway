@@ -25,12 +25,34 @@ function packageAliases(): Record<string, string> {
 
 const testDirs = ['unit', 'integration', 'security', 'e2e'] as const;
 
+// Per-package colocated tests join the unit tier.
+const unitInclude = [
+  'tests/unit/**/*.test.ts',
+  'packages/*/tests/**/*.test.ts',
+  'packages/adapters/*/tests/**/*.test.ts',
+];
+
 export default defineConfig({
   resolve: { alias: packageAliases() },
   test: {
     projects: testDirs.map((tier) => ({
       extends: true,
-      test: { name: tier, include: [`tests/${tier}/**/*.test.ts`] },
+      test: { name: tier, include: tier === 'unit' ? unitInclude : [`tests/${tier}/**/*.test.ts`] },
     })),
+    coverage: {
+      provider: 'v8',
+      include: ['packages/*/src/**', 'packages/adapters/*/src/**'],
+      // index.ts barrels are pure re-exports; @raag/testing is test-only
+      // infrastructure, not production code (ADR-024).
+      exclude: ['**/index.ts', '**/*.d.ts', 'packages/testing/src/**'],
+      reporter: ['text', 'json-summary'],
+      // Phase 2 floors (ADR-024): security-critical pure logic held highest.
+      thresholds: {
+        lines: 90,
+        statements: 90,
+        branches: 85,
+        functions: 90,
+      },
+    },
   },
 });

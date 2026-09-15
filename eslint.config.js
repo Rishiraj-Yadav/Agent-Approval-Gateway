@@ -2,13 +2,13 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 /**
- * ESLint 9 flat config (ADR-014, ADR-017). Non-type-aware rules only for
- * Phase 1 (fast, flake-free on Windows + Linux); type-aware lint upgrade is a
- * Phase 2 item once domain code has shapes worth checking.
+ * ESLint 10 flat config (ADR-014 → ADR-025 type-aware in Phase 2).
  *
  * The architectural import rule from docs/architecture.md is expressed with
- * no-restricted-imports: boundaries first, then a global child_process ban
- * (ADR-004), then zero-runtime-deps expectations.
+ * no-restricted-imports: domain purity, a global child_process ban (ADR-004),
+ * and core/application never naming vendor code. Type-aware rules run over
+ * everything compiled by tsconfig.dev.json (which includes packages' src,
+ * package tests, apps and the root tests) — ADR-025.
  */
 export default tseslint.config(
   {
@@ -16,6 +16,24 @@ export default tseslint.config(
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked.map((c) => ({
+    ...c,
+    files: [
+      'packages/*/src/**/*.ts',
+      'packages/*/tests/**/*.ts',
+      'packages/adapters/*/src/**/*.ts',
+      'packages/adapters/*/tests/**/*.ts',
+      'apps/*/src/**/*.ts',
+      'tests/**/*.ts',
+    ],
+    languageOptions: {
+      parserOptions: {
+        // type-aware linting via the noEmit dev project (ADR-025)
+        project: ['./tsconfig.dev.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  })),
   {
     files: [
       'packages/*/src/**/*.ts',
@@ -55,8 +73,11 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@raag/*', 'node:*', '*.js'],
-              message: '@raag/domain must import nothing (types + ports + state machine only).',
+              // Anything that is not a relative "./x" import is banned:
+              // third-party, node:* builtins AND sibling @raag packages.
+              regex: '^(?!\\./).*$',
+              message:
+                '@raag/domain may only import its own relative modules (ADR-003, architecture.md §16).',
             },
           ],
         },

@@ -230,3 +230,198 @@ composition/facade barrel used by apps. This matches the architecture's layer
 table while preserving the requested folder names.
 **Consequences:** Three thin packages instead of one `core`; the meta-test
 asserts `domain` imports nothing outside itself to keep the dependency rule real.
+
+## ADR-019 — State machine: eight named states, pure reducer, audit-before-store
+
+**Status:** accepted (Phase 2)
+**Context:** Phase 0 drafted lifecycle names (`submitted/.../abandoned/
+delivered/closed`), while the Phase 2 specification mandates the set
+CREATED, PENDING, APPROVED, DENIED, EXPIRED, CANCELLED, AGENT_DISCONNECTED,
+FAILED — and approval _must_ be modeled as a state machine, never a boolean.
+**Decision:** The implemented domain (`packages/domain`) uses exactly the
+eight spec states. `submitted`→`created`, `abandoned`→`agent-disconnected`;
+`delivered/undelivered/closed` are deliberately NOT states (a terminal
+decision is immutable by invariant); delivery is expressed as application
+audit events in later phases. The reducer returns typed outcomes
+(`advanced | duplicate | no-change | conflict | rejected`) instead of
+throwing on legal-but-useless events, and bumps an optimistic-concurrency
+`version` on every advance. Expiry is **inclusive** (`now >= expiresAt` is
+expired), and the core clock re-stamps every creation instant — callers
+cannot extend TTLs by lying about their own clocks. **Audit-before-store:**
+a decision transition never writes the store if its durable audit append
+failed (prevention, not rollback — terminal states cannot be un-decided, so
+there is nothing unsafe to revert). docs/architecture.md §14/§15 rewritten to
+match. `expired`, `cancelled`, `agent-disconnected`, `failed` are
+deny-equivalents (§16).
+
+## ADR-020 — Port placement: domain owns storage/temporal ports, application owns interaction ports
+
+**Status:** accepted (Phase 2)
+**Context:** Both layers legitimately host abstractions; a blanket "all
+ports in one package" rule makes either layer import-heavy and blurs the
+dependency rule.
+**Decision:** `@raag/domain` defines ports whose vocabulary is pure data
+(`Clock`, `IdGenerator`, `ApprovalRepository`, `AuditSink`) — because those
+contracts ARE domain language. The application layer defines interaction
+ports (`PolicyEngine`, `NotificationProvider`, `ApprovalChannel`,
+`AgentAdapter`, `Transport`) that coordinate I/O boundaries. `ApprovalService`
+was intentionally NOT created as a port: `ApprovalManager` already is that
+service; a same-shaped interface would be a speculative abstraction.
+Every port file carries a "WHY" comment; ports without a planned consumer
+are rejected.
+**Consequences:** The architecture lint restricts domain to relative-only
+imports; application to domain types + its own ports; vendor code only in
+leaf implementations of these ports (future phases).
+
+## ADR-021 — Branded opaque IDs; one ID alphabet
+
+**Status:** accepted (Phase 2)
+**Context:** `requestId`, `correlationId`, `machineId`, `sessionId`,
+`projectId` flowing as bare `string` invites silent cross-wiring bugs and
+hostile-shape injection.
+**Decision:** Each ID family is its own TypeScript brand (`OpaqueId<T>`,
+zero-cost, no runtime tag). One shared alphabet
+`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` — whitespace, punctuation, path and
+shell metacharacters are structurally impossible in any ID, so IDs are safe
+inside log JSON, wire frames and eventually Telegram callback data.
+Parsing functions live in domain, are total (`unknown` in), and throw
+`DomainError("invalid-id", field)` quoting only the _rule_, never the value.
+**Consequences:** Cross-brand mixups become compile errors; adapter code
+must validate IDs through the same functions (fail closed before domain
+construction).
+
+## ADR-022 — Decision kinds carry scope; four kinds, two allow classes
+
+**Status:** accepted (Phase 2)
+**Context:** Operators can answer with "Allow Once", "Allow Session", "Deny",
+"Stop Agent"; booleans lose the distinction, and "session" must not become a
+persistent privilege the core forgets tracking.
+**Decision:** `DecisionKind = allow-once | allow-session | deny | stop-agent`
+in domain. `terminalStateForDecision` is the only place mapping kinds to
+terminal states (allow-variant → approved, deny/stop → denied);
+`decisionHasSessionScope` / `decisionRequestsStop` expose the semantic flags.
+What _enforcement_ of session-scope or stop means (adapters, policy rules) is
+deliberately out of domain scope for later phases — the domain records the
+decision truthfully and nothing else. Duplicate identical decisions are
+idempotent `duplicate` outcomes; conflicting decisions are `conflict` and
+never overwrite a terminal state.
+**Consequences:** No decision concept can accidentally collapse to `true`.
+
+## ADR-023 — Time model: core clock, branded millis, TTL range
+
+**Status:** accepted (Phase 2)
+**Context:** Expiry semantics must be testable to the exact boundary, and
+specification mandates 120 s default; a magic `120000` scattered through code
+repeats the classic unit-confusion bug.
+**Decision:** `DEFAULT_APPROVAL_TTL_SECONDS = 120` is one domain constant
+used by config defaults and the request factory. Durations are a branded
+`DurationMillis`; `secondsToDuration` enforces an integer-seconds domain and
+the range 1..3600 (hard cap documented as fail-closed hygiene: no
+"approve-me-tomorrow" requests). All "now" reads come from a `Clock` port —
+domain code never calls `Date.now()`; the production clock lives in
+`@raag/testing` only until the gateway wiring phase gives it a home in
+`@raag/config`/composition. Tests use the fake clock for inclusive-boundary
+exactly (`expiresAt - 1`, `expiresAt`, `+1`) without sleeping.
+
+## ADR-024 — Configuration validation thresholds (values never echoed)
+
+**Status:** accepted (Phase 2)
+**Context:** security.md required loopback-only binding and "HMAC key
+entropy >= 32 bytes" but fixed no algorithm; §1-10 require zero default
+secrets and secret-free error paths.
+**Decision:** Implemented minimums: `GATEWAY_HOST` must be exactly
+127.0.0.1 / localhost / ::1 — `0.0.0.0`, `::`, and every routable literal
+are fatal config errors, never warnings or silent coercions.
+`APPROVAL_HMAC_KEY`: non-empty, **>= 32 characters**, reject trivially
+uniform keys and the placeholder words (change-me/dev/test/example/...),
+**>= 3.5 Shannon bits/character** — the last is a chosen (documented)
+minimum; it catches copy-paste "aaaa…" mistakes without pretending to
+measure secret strength. Relay keys share the >= 32-char floor and require
+`https://` only. Every error is a `{field, reason}` pair containing only
+field names + static text; tests assert secret substrings are absent from
+serialized results. Config never defaults a secret: the only defaulted
+fields are public safe choices (host, ttl, log level); an omitted required
+value simply fails. (A `.env` loader is Node built-in `--env-file` in a
+later bootstrap — no dotenv dependency.)
+
+## ADR-025 — Redaction: pattern+name rules, bounded traversal, honest limits
+
+**Status:** accepted (Phase 2)
+**Context:** §1-10 "secrets never to Telegram/logs"; arbitrary agent input
+must be renderable for humans; naive regex "secret scanners" tempt people
+into thinking unredacted leftovers are safe.
+**Decision:** `@raag/security` provides deterministic, idempotent
+`redactString` (PEM/JWT/bot-token/AWS/bearer/authorization/kv/base64-length
+rules, ordered specific→generic) and `redactUnknown` (structural redaction:
+sensitive field _names_ replace whole values; string leaves pass through;
+depth/array/object caps; cycles broken; null-prototype outputs so hostile
+`__proto__` entries never pollute the result). **Documented limitation:**
+this is a defense-in-depth layer; the primary guarantees are the structural
+ones — payloads are hashed+discarded, secrets live in env/config code never
+touches, and channel callbacks carry HMAC tokens rather than text. Tests
+cover API keys, bearer, bot tokens, password pairs, nested/huge/malicious
+graphs, and idempotence rather than trusting a perfect scanner.
+
+## ADR-026 — Protocol: exact-field DTOs, opaque tokens, no shell content in identifiers
+
+**Status:** accepted (Phase 2)
+**Context:** wire frames arrive from sockets/pipes and must be treated as
+hostile even "inside the machine" (defense in depth).
+**Decision:** `@raag/protocol` ships versioned DTOs (`raag.v1`: submit /
+decision / reject) + `parseMessage(unknown)` that enforces exact key sets
+(unknown field = reject), opaque-ID patterns, sha256-only content fields,
+bounded ints, a 256 KB body cap, printable-only display text, and opaque
+base64url tokens (`^[A-Za-z0-9_-]{8,256}={0,2}$`) that can carry no
+whitespace/shell/URL syntax at all. Parsing never executes, evaluates, or
+interpolates any field; `correlationId` rides unchanged through submit →
+decision so responses route to their origin. NO transport is implemented
+here (no HTTP/WS/Telegram sockets) — parseMessage is the untrusted-input
+boundary for later phases.
+
+## ADR-027 — Claude Code adapter skeleton: normalization + inert rendering only
+
+**Status:** accepted (Phase 2 skeleton)
+**Context:** Phase 2 forbids real agent integration but requires the first
+adapter boundary to prove out the port shape.
+**Decision:** `@raag/claude-code` implements the documentation-named
+`PreToolUse` hook payload contract as pure functions: normalize
+`tool_input → createApprovalRequest` with a SHA-256 digest (Node `crypto`
+for the hash is fine — read-only, no subprocesses), never persisting raw
+input; `renderHookDecision` returns literal strings for a later hook
+runtime. No settings writes, no process I/O, no keyboard/terminal access,
+no Telegram/database imports — enforced by the global child_process ban, the
+import restrictions, and tests asserting the pure mapping + fail-closed
+invalid-shape behavior. Codex/Kilo/generic
+remain placeholder packages with the same independence (`@raag/domain`
+only) — their skeletons are NOT implemented (not "wired" in docs).
+
+## ADR-028 — Type-aware ESLint (Phase 2 §21 upgrade)
+
+**Status:** accepted (Phase 2)
+**Context:** Phase 1 used non-type-aware rules for install-free green.
+**Decision:** `typescript-eslint` `recommendedTypeChecked` for packages'
+src/tests + apps/tests + root tests, with `project: ./tsconfig.dev.json` —
+chosen over `projectService` because dev.json is the existing
+noEmit-everything project; zero new packages needed and project-reference
+composite projects stay out of the lint program graph. Restrictive rules
+kept; `dot-notation` off (untrusted-index style `input['field']` is the
+convention for hostile payloads; property existence checks are intentional).
+No architecture-restriction rule was weakened to make lint pass — each of
+the 14 initial findings was fixed in code/tests instead (assertion, import,
+union-narrowing removals).
+
+## ADR-029 — Coverage: @vitest/coverage-v8 dev-dependency + floors 90/85/90/90
+
+**Status:** accepted (Phase 2)
+**Context:** §22: coverage without pretending; the existing Vitest needs a
+provider package.
+**Decision:** devDependency `@vitest/coverage-v8` (same version line as
+vitest = its own project, MIT, zero runtime footprint; provider "v8" over
+"c8" choice = maintained first-party). Floor: lines/stmts/functions 90,
+branches 85. Included: `packages/*/src` + adapter sources; excluded:
+`**/index.ts` barrels (no logic, they hold only re-exports) and
+`packages/testing` (its own code is test infrastructure). Placeholder
+skeletons without behavior are not counted as production code; the
+placeholders that grow logic must grow tests. `npm run test:coverage`
+enforces; CI runs it as the Tests step. Gap-closing tests raised the bar
+rather than the bar being lowered (measured 92.5/88.4/99.2/94.5).

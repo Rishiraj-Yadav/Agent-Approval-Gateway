@@ -16,5 +16,8 @@
   ],
   "scripts": {
     "build": "tsc -b"
+  },
+  "dependencies": {
+    "@raag/security": "*"
   }
 }

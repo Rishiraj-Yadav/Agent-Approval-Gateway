@@ -100,10 +100,12 @@ describe('domain and layer purity (dependency rule, architecture.md §16)', () =
       : [];
   }
 
-  it('domain sources import nothing at all', () => {
+  it('domain sources import nothing outside their own package', () => {
     for (const file of sources('packages/domain/src')) {
       const text = readFileSync(file, 'utf8');
-      expect(text, file).not.toMatch(/\bfrom\s+["']/);
+      // Only relative same-package imports allowed — no bare specifiers,
+      // no node: builtins, no workspace deps.
+      expect(text, file).not.toMatch(/\bfrom\s+["'](?!\.\/)/);
     }
   });
 

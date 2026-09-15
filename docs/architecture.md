@@ -374,59 +374,74 @@ Distinct from authentication — _who may decide what_:
 
 ## 14. Approval Lifecycle
 
-A request exists in exactly one of these states, keyed by globally unique
-`id`, carrying `ttl` (default 120s, configurable per rule):
+Phase 2 IMPLEMENTED (ADR-019 reconciles this section's earlier draft names).
+A request exists in exactly one of eight states, keyed by a globally unique,
+brand-validated `requestId`, correlated to the caller by `correlationId`, and
+carrying a core-stamped TTL (default 120 s, hard max 1 h):
 
 ```
-submitted → pending → { approved | denied } → delivered → closed
-pending → expired → closed            (auto-deny path)
-pending → cancelled (by agent/session end) → closed
-approved/denied → undelivered → closed (decision made, agent gone)
-any → abandoned (process crash recovery: unresolved pending→expired at startup)
+created ──persisted──► pending ──┬─ decided:allow* ──► approved   (terminal)
+   │                             ├─ decided:deny|stop► denied    (terminal)
+   │ (durable insert)            ├─ clock ≥ expires ─► expired    (terminal, ≡ deny)
+   │                             ├─ cancelled ───────► cancelled  (terminal, ≡ deny)
+   │                             ├─ origin lost ─────► agent-disconnected (terminal, ≡ deny)
+   └───────── failed ────────────┴─ infrastructure ──► failed     (terminal, deny-equivalent)
 ```
 
-- `submitted`: validated, not yet durable. `pending`: durable + prompt sent or
-  being sent. A request is only _resolvable_ while `pending`.
-- `approved`/`denied` are terminal **decisions**; `delivered`/`closed`
-  distinguish "agent received it" from "housekeeping finished" so a crash
-  between decision and delivery is auditable (§17).
-- Every state change is one atomic transaction that also appends the audit
-  event, bumps `version`, and (on terminal transitions) schedules the channel
-  edit.
+Mapping from the original draft: `submitted`→`created`, `abandoned`→
+`agent-disconnected`; `delivered`/`undelivered`/`closed` are **application
+audit events** (`request-resolved` + delivery events in later phases), not
+domain states — terminality of `approved`/`denied` is absolute, while
+"delivered or not" remains observable in the audit stream (§17).
+
+- `created`: validated + durably inserted, not yet promptable; `pending`:
+  prompt path. Only `pending` is resolvable.
+- Every transition is immutable (functional update), bumps `version`, and the
+  store write is a version-checked compare-and-swap.
+- Restart recovery: unresolved pendings expire by their own TTLs; expiry is
+  evaluated exclusively against the core `Clock` (§15 guards).
 
 ## 15. State Machine
 
-Implemented as a pure reducer in the core (no I/O, trivially testable):
+Implemented as a pure reducer in `@raag/domain/machine.ts` — no I/O, no
+clocks it owns, exhaustive and property-tested:
 
-```
-        submit(validate ✓)
-             │
-             ▼
-   ┌──── pending ────┬── human APPROVE (HMAC✓, ttl✓, version✓) ──► approved
-   │                 ├── human DENY   (…)                         ──► denied
-   │                 ├── policy/local cancel (agent gone)         ──► cancelled
-   │                 └── clock ≥ expires_at                       ──► expired  (≡ deny)
-   ▼
- approved/denied ── deliver ok ──► delivered ──► closed
-                 └─ deliver fail/agent gone ──► undelivered ──► closed
- expired/cancelled ─────────────────────────────────────────► closed
-```
+| From            | Event                                | To                 | Kind                                |
+| --------------- | ------------------------------------ | ------------------ | ----------------------------------- |
+| created         | persisted                            | pending            | advance (version+1)                 |
+| created/pending | failed                               | failed             | advance (deny-equivalent)           |
+| pending         | decided (allow-once/allow-session)   | approved           | advance                             |
+| pending         | decided (deny/stop-agent)            | denied             | advance                             |
+| pending         | expired (now ≥ expiresAt, inclusive) | expired            | advance                             |
+| pending         | cancelled                            | cancelled          | advance                             |
+| pending         | agent-disconnected                   | agent-disconnected | advance                             |
+| terminal        | same decision                        | —                  | `duplicate` (no effect, idempotent) |
+| approved/denied | differing decision                   | —                  | `conflict` (state frozen)           |
+| terminal        | any non-decision event               | —                  | `no-change`                         |
+| non-pending     | lifecycle probes                     | —                  | `rejected` (typed reason)           |
 
-Transition guards (all checked inside the core, single-writer):
+Transition guards (all checked inside the core, single-writer; §7/§17):
 
 1. Current state must be in the source set of the event — **no self-loops, no
-   skipping** (a second APPROVE on `approved` is rejected; caller receives the
-   _current_ state instead; idempotent from the user's view, no double effect).
-2. `now < expires_at` for decision events; expiry is evaluated by the machine,
-   never trusted from a client.
-3. Optimistic `version` check for concurrent writers (defense-in-depth above
-   the single-writer loop, §18).
-4. **Unknown events or states → reject + audit + metric.** Rejection is safe
-   because the absence of an accepted transition is always a deny to the agent
-   (fail closed is structural, not a special case).
+   skipping**; rejection is a typed outcome, not an exception, so the manager
+   audts classification without exception plumbing.
+2. `now < expiresAt` for decision events with `now` supplied by the core
+   Clock at event time; the expiry boundary is **inclusive** (ADR-019):
+   `now == expiresAt` can no longer be approved. Late/expired decisions are
+   never re-applied after restart either (post-restart they read `unknown`
+   against an empty store and expire closed).
+3. Optimistic `version` CAS at the repository (defense-in-depth above the
+   single-writer loop; §18; the DB phase upgrades this to transactional).
+4. **Unknown events or states → reject + audit.** Absence of an accepted
+   transition is always a deny to the agent — fail-closed is structural.
+5. **Audit-before-store** for every decision transition: if the durable audit
+   append fails, the store is never written; the approval cannot exist without
+   its record (ADR-019; implemented in `ApprovalManager` and tested).
 
-`expired` and `cancelled` are **deny-equivalent**: both return a native denial
-to the agent.
+`expired`, `cancelled`, `agent-disconnected` and `failed` are
+**deny-equivalent**: delivery code (§19 adapters/transport) maps all four to a
+native denial; `approved`/`denied` are the only states whose audit trail says
+"human/policy resolved this".
 
 ## 16. Security Boundaries
 
@@ -566,7 +581,7 @@ out of v1 deliberately. Boundary rules that make that safe later:
 
 ---
 
-## Dependency rule (enforced in Phase 3 by lint)
+## Dependency rule (enforced since Phase 2 by type-aware ESLint + purity meta-test)
 
 ```
 core/  ──►  ports/  only

@@ -1,10 +1,5 @@
 /**
- * @raag/protocol — Wire-level DTOs for adapter↔gateway (loopback) and gateway↔relay message frames. Keeps domain types out of serialized surfaces.
- *
- * Phase 1 scaffold: placeholders only. Implementation per
- * docs/architecture.md lands in Phase 2+.
+ * @raag/protocol — normalized, untrusted-input-validated wire messages.
+ * No transport code (HTTP/relay/Telegram) lives here, only DTOs+parsing.
  */
-import { packageName as domain } from '@raag/domain';
-
-export const packageName = '@raag/protocol' as const;
-export const builtOn = domain;
+export * from './messages.js';

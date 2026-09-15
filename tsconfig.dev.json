@@ -31,7 +31,9 @@
   },
   "include": [
     "packages/*/src",
+    "packages/*/tests",
     "packages/adapters/*/src",
+    "packages/adapters/*/tests",
     "apps/*/src",
     "tests/**/*.ts",
     "vitest.config.ts"

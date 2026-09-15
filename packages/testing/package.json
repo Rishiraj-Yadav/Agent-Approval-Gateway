@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@raag/domain": "*",
-    "@raag/logging": "*"
+    "@raag/logging": "*",
+    "@raag/config": "*",
+    "@raag/database": "*"
   }
 }
